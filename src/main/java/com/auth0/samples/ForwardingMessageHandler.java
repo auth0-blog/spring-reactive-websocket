@@ -9,27 +9,28 @@ import org.springframework.web.reactive.socket.WebSocketMessage;
 import org.springframework.web.reactive.socket.WebSocketSession;
 import reactor.core.publisher.FluxSink;
 
-import java.io.File;
+import java.util.Date;
 
 public class ForwardingMessageHandler implements MessageHandler {
     private WebSocketSession session;
     private FluxSink<WebSocketMessage> sink;
-    private String sessionId;
     private ObjectMapper objectMapper;
 
-    public ForwardingMessageHandler(WebSocketSession session, FluxSink<WebSocketMessage> sink) {
+    ForwardingMessageHandler(WebSocketSession session, FluxSink<WebSocketMessage> sink) {
         this.session = session;
         this.sink = sink;
-        this.sessionId = session.getId();
         this.objectMapper = new ObjectMapper();
     }
 
     @Override
     public void handleMessage(Message<?> message) throws MessagingException {
         try {
-            File payload = (File) message.getPayload();
-            FileEvent event = new FileEvent(sessionId, payload.getPath());
-            WebSocketMessage textMessage = session.textMessage(objectMapper.writeValueAsString(event));
+            String payload = (String) message.getPayload();
+            String when = (new Date()).toString();
+            MessageEvent messageEvent = new MessageEvent(when, payload);
+            String textMessageEvent = objectMapper.writeValueAsString(messageEvent);
+            System.out.println(textMessageEvent);
+            WebSocketMessage textMessage = session.textMessage(textMessageEvent);
             sink.next(textMessage);
         } catch (JsonProcessingException e) {
             throw new MessagingException(e.getMessage());

@@ -7,7 +7,7 @@ import lombok.NoArgsConstructor;
 @Data
 @NoArgsConstructor
 @AllArgsConstructor
-public class FileEvent {
-    private String sessionId;
-    private String path;
+class MessageEvent {
+    private String when;
+    private String message;
 }

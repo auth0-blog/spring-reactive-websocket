@@ -1,15 +1,18 @@
 package com.auth0.samples;
 
-import org.springframework.beans.factory.annotation.Value;
+import io.lettuce.core.RedisClient;
+import io.lettuce.core.pubsub.StatefulRedisPubSubConnection;
+import io.lettuce.core.pubsub.api.reactive.RedisPubSubReactiveCommands;
+import org.reactivestreams.Publisher;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Primary;
 import org.springframework.integration.channel.PublishSubscribeChannel;
 import org.springframework.integration.dsl.IntegrationFlow;
 import org.springframework.integration.dsl.IntegrationFlows;
-import org.springframework.integration.file.dsl.FileInboundChannelAdapterSpec;
-import org.springframework.integration.file.dsl.Files;
+import org.springframework.messaging.Message;
 import org.springframework.messaging.MessageHandler;
+import org.springframework.messaging.support.GenericMessage;
 import org.springframework.web.reactive.HandlerMapping;
 import org.springframework.web.reactive.handler.SimpleUrlHandlerMapping;
 import org.springframework.web.reactive.socket.WebSocketHandler;
@@ -18,7 +21,6 @@ import org.springframework.web.reactive.socket.server.support.WebSocketHandlerAd
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.FluxSink;
 
-import java.io.File;
 import java.util.Collections;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -27,33 +29,29 @@ import java.util.function.Consumer;
 
 @Configuration
 public class WebSocketConfiguration {
+    private static final String REDIS_URL = "redis://localhost";
+    private static final String REDIS_MESSAGING_CHANNEL = "messaging-channel";
+    private final Map<String, MessageHandler> connections = new ConcurrentHashMap<>();
+
     @Bean
-    public IntegrationFlow fileFlow(PublishSubscribeChannel channel, @Value("file://${HOME}/Desktop/in") File file) {
-        FileInboundChannelAdapterSpec in = Files.inboundAdapter(file).autoCreateDirectory(true);
-//        return IntegrationFlows.from(
-//        in,
-//                new Consumer<SourcePollingChannelAdapterSpec>() {
-//                    @Override
-//                    public void accept(SourcePollingChannelAdapterSpec p) {
-//                        p.poller(new Function<PollerFactory, PollerSpec>() {
-//                            @Override
-//                            public PollerSpec apply(PollerFactory pollerFactory) {
-//                                return pollerFactory.fixedRate(1000);
-//                            }
-//                        });
-//                    }
-//                }
-        return IntegrationFlows.from(
-                in,
-                p -> p.poller(pollerFactory -> {
-                    return pollerFactory.fixedRate(1000);
-                })
-        ).channel(channel).get();
+    public RedisClient redisClient() {
+        return RedisClient.create(REDIS_URL);
+    }
+
+    @Bean
+    public IntegrationFlow fileFlow(PublishSubscribeChannel channel, RedisClient redisClient) {
+        StatefulRedisPubSubConnection<String, String> connection = redisClient.connectPubSub();
+        RedisPubSubReactiveCommands<String, String> reactive = connection.reactive();
+        reactive.subscribe(REDIS_MESSAGING_CHANNEL).subscribe();
+
+        Publisher<Message<?>> p = reactive.observeChannels()
+                .map(channelMessage -> new GenericMessage<>(channelMessage.getMessage()));
+        return IntegrationFlows.from(p).channel(channel).get();
     }
 
     @Bean
     @Primary
-    public PublishSubscribeChannel incomingFilesChannel() {
+    public PublishSubscribeChannel pubSubChannel() {
         return new PublishSubscribeChannel();
     }
 
@@ -65,7 +63,6 @@ public class WebSocketConfiguration {
     @Bean
     public WebSocketHandler webSocketHandler(PublishSubscribeChannel channel) {
         return session -> {
-            Map<String, MessageHandler> connections = new ConcurrentHashMap<>();
             Flux<WebSocketMessage> publisher = Flux.create((Consumer<FluxSink<WebSocketMessage>>) fluxSink -> {
                 connections.put(session.getId(), new ForwardingMessageHandler(session, fluxSink));
                 channel.subscribe(connections.get(session.getId()));
@@ -81,7 +78,7 @@ public class WebSocketConfiguration {
     public HandlerMapping handlerMapping(WebSocketHandler webSocketHandler) {
         SimpleUrlHandlerMapping handlerMapping = new SimpleUrlHandlerMapping();
         handlerMapping.setOrder(10);
-        handlerMapping.setUrlMap(Collections.singletonMap("/ws/files", webSocketHandler));
+        handlerMapping.setUrlMap(Collections.singletonMap("/ws/messages", webSocketHandler));
         return handlerMapping;
     }
 }
