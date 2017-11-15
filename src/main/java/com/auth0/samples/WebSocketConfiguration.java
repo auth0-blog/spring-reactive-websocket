@@ -85,9 +85,10 @@ public class WebSocketConfiguration {
             }
             final String name = (String) userInfo.getValues().get("name");
             final String picture = (String) userInfo.getValues().get("picture");
+            final String sub = (String) userInfo.getValues().get("sub");
             session.receive()
                     .flatMap(webSocketMessage ->
-                            Mono.just(new MessageEvent("today", name, picture, webSocketMessage.getPayloadAsText()))
+                            Mono.just(new MessageEvent("today", sub, name, picture, webSocketMessage.getPayloadAsText()))
                     )
                     .flatMap(messageEvent -> {
                         redisClient.connectPubSub()

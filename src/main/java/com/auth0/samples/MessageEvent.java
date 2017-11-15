@@ -15,6 +15,7 @@ class MessageEvent {
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
     private String when;
+    private String sub;
     private String name;
     private String picture;
     private String message;
