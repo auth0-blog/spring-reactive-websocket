@@ -16,9 +16,8 @@ public class ForwardingMessageHandler implements MessageHandler {
     private FluxSink<WebSocketMessage> sink;
     private ObjectMapper objectMapper;
 
-    ForwardingMessageHandler(WebSocketSession session, FluxSink<WebSocketMessage> sink) {
+    ForwardingMessageHandler(WebSocketSession session) {
         this.session = session;
-        this.sink = sink;
         this.objectMapper = new ObjectMapper();
     }
 
@@ -32,5 +31,9 @@ public class ForwardingMessageHandler implements MessageHandler {
         } catch (JsonProcessingException e) {
             throw new MessagingException(e.getMessage());
         }
+    }
+
+    void setSink(FluxSink<WebSocketMessage> sink) {
+        this.sink = sink;
     }
 }
