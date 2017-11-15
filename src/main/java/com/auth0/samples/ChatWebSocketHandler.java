@@ -24,6 +24,7 @@ import org.springframework.web.reactive.socket.WebSocketSession;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.FluxSink;
 import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
 
 import java.security.interfaces.RSAPublicKey;
 import java.util.function.Consumer;
@@ -53,22 +54,12 @@ public class ChatWebSocketHandler implements WebSocketHandler {
 
     @Override
     public Mono<Void> handle(WebSocketSession session) {
-        String verifiedToken = authenticateHandshake(session.getHandshakeInfo());
-        if (verifiedToken == null) {
-            return session.receive().then(Mono.create(monoSink -> {
-                session.close(CloseStatus.POLICY_VIOLATION);
-            }));
-        }
-
-        try {
-            AuthAPI auth = new AuthAPI(auth0Domain, auth0ClientId, auth0ClentSecret);
-            UserInfo userInfo = auth.userInfo(verifiedToken).execute();
-
+        return authenticateHandshake(session.getHandshakeInfo()).switchIfEmpty(
+                session.receive().then(Mono.create(monoSink -> session.close(CloseStatus.POLICY_VIOLATION)))
+        ).flatMap(token -> getUserInfo(token).flatMap(userInfo -> {
             listenToMessages(session, userInfo, redisClient);
             return session.send(publishMessages(session, channel));
-        } catch (Auth0Exception e) {
-            throw new RuntimeException(e);
-        }
+        })).doOnError(throwable -> session.close(CloseStatus.POLICY_VIOLATION));
     }
 
     private void listenToMessages(WebSocketSession session, UserInfo userInfo, RedisClient redisClient) {
@@ -88,28 +79,41 @@ public class ChatWebSocketHandler implements WebSocketHandler {
         }).doFinally(signalType -> channel.unsubscribe(messageHandler));
     }
 
-    private String authenticateHandshake(HandshakeInfo handshake) {
-        String queryParams = handshake.getUri().getQuery();
-        if (queryParams == null) {
-            return null;
-        }
-        String token = queryParams.replace("token=", "");
-        if (token.isEmpty()) {
-            return null;
-        }
+    private Mono<UserInfo> getUserInfo(String token) {
+        return Mono.fromCallable(() -> {
+            try {
+                AuthAPI auth = new AuthAPI(auth0Domain, auth0ClientId, null);
+                return auth.userInfo(token).execute();
+            } catch (Auth0Exception e) {
+                throw new RuntimeException(e);
+            }
+        }).subscribeOn(Schedulers.elastic());
+    }
 
-        DecodedJWT jwt = JWT.decode(token);
-        String kid = jwt.getKeyId();
-        JwkProvider provider = new UrlJwkProvider(auth0Domain);
+    private Mono<String> authenticateHandshake(HandshakeInfo handshake) {
+        return Mono.fromCallable(() -> {
+            String queryParams = handshake.getUri().getQuery();
+            if (queryParams == null) {
+                return null;
+            }
+            String token = queryParams.replace("token=", "");
+            if (token.isEmpty()) {
+                return null;
+            }
 
-        try {
-            Jwk jwk = provider.get(kid);
-            Algorithm algorithm = Algorithm.RSA256((RSAPublicKey) jwk.getPublicKey(), null);
-            JWTVerifier verifier = JWT.require(algorithm).build();
-            verifier.verify(token);
-        } catch (JwkException | SignatureVerificationException e) {
-            return null;
-        }
-        return token;
+            DecodedJWT jwt = JWT.decode(token);
+            String kid = jwt.getKeyId();
+            JwkProvider provider = new UrlJwkProvider(auth0Domain);
+
+            try {
+                Jwk jwk = provider.get(kid);
+                Algorithm algorithm = Algorithm.RSA256((RSAPublicKey) jwk.getPublicKey(), null);
+                JWTVerifier verifier = JWT.require(algorithm).build();
+                verifier.verify(token);
+            } catch (JwkException | SignatureVerificationException e) {
+                return null;
+            }
+            return token;
+        }).subscribeOn(Schedulers.elastic());
     }
 }
