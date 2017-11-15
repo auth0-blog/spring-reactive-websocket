@@ -25,9 +25,7 @@ public class ForwardingMessageHandler implements MessageHandler {
     @Override
     public void handleMessage(Message<?> message) throws MessagingException {
         try {
-            String payload = (String) message.getPayload();
-            String when = (new Date()).toString();
-            MessageEvent messageEvent = new MessageEvent(when, payload);
+            MessageEvent messageEvent = MessageEvent.fromJson((String) message.getPayload());
             String textMessageEvent = objectMapper.writeValueAsString(messageEvent);
             System.out.println(textMessageEvent);
             WebSocketMessage textMessage = session.textMessage(textMessageEvent);
