@@ -13,6 +13,7 @@ import com.auth0.jwt.algorithms.Algorithm;
 import com.auth0.jwt.exceptions.SignatureVerificationException;
 import com.auth0.jwt.interfaces.DecodedJWT;
 import io.lettuce.core.RedisClient;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.integration.channel.PublishSubscribeChannel;
@@ -23,12 +24,12 @@ import org.springframework.web.reactive.socket.CloseStatus;
 import org.springframework.web.reactive.socket.HandshakeInfo;
 import org.springframework.web.reactive.socket.WebSocketHandler;
 import org.springframework.web.reactive.socket.WebSocketMessage;
+import org.springframework.web.reactive.socket.WebSocketSession;
 import org.springframework.web.reactive.socket.server.support.WebSocketHandlerAdapter;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.FluxSink;
 import reactor.core.publisher.Mono;
 
-import java.security.interfaces.RSAPrivateKey;
 import java.security.interfaces.RSAPublicKey;
 import java.util.Collections;
 import java.util.Map;
@@ -40,11 +41,16 @@ import static com.auth0.samples.RedisConfiguration.REDIS_MESSAGING_CHANNEL;
 
 @Configuration
 public class WebSocketConfiguration {
-    private static final RSAPrivateKey NULL_PRIVATE_KEY = null;
-    private static final String AUTH0_DOMAIN = "https://bkrebs.auth0.com/";
-    private static final String AUTH0_CLIENT_ID = "Y9ewnKjvAHkHfedDP0SY7WYplFfn7Dzx";
-    private static final String AUTH0_CLIENT_SECRET = "Y4g6uKxRqMkEG3pgIj1OVOt8DXfmkl3Gd7-uRQHkyfX5auHjyJ6IVZvZcA5KXk_x";
     private final Map<String, MessageHandler> connections = new ConcurrentHashMap<>();
+
+    @Value("${auth0.domain}")
+    private String auth0Domain;
+
+    @Value("${auth0.clientId}")
+    private String auth0ClientId;
+
+    @Value("${auth0.clientSecret}")
+    private String auth0ClentSecret;
 
     @Bean
     public WebSocketHandlerAdapter webSocketHandlerAdapter() {
@@ -69,36 +75,35 @@ public class WebSocketConfiguration {
                 }));
             }
 
-            Flux<WebSocketMessage> publisher = Flux.create((Consumer<FluxSink<WebSocketMessage>>) fluxSink -> {
-                connections.put(session.getId(), new ForwardingMessageHandler(session, fluxSink));
-                channel.subscribe(connections.get(session.getId()));
-            }).doFinally(signalType -> {
-                channel.unsubscribe(connections.get(session.getId()));
-                connections.remove(session.getId());
-            });
-            AuthAPI auth = new AuthAPI(AUTH0_DOMAIN, AUTH0_CLIENT_ID, AUTH0_CLIENT_SECRET);
-            UserInfo userInfo = null;
             try {
-                userInfo = auth.userInfo(verifiedToken).execute();
+                AuthAPI auth = new AuthAPI(auth0Domain, auth0ClientId, auth0ClentSecret);
+                UserInfo userInfo = auth.userInfo(verifiedToken).execute();
+
+                listenToMessages(session, userInfo, redisClient);
+                return session.send(publishMessages(session, channel));
             } catch (Auth0Exception e) {
                 throw new RuntimeException(e);
             }
-            final String name = (String) userInfo.getValues().get("name");
-            final String picture = (String) userInfo.getValues().get("picture");
-            final String sub = (String) userInfo.getValues().get("sub");
-            session.receive()
-                    .flatMap(webSocketMessage ->
-                            Mono.just(new MessageEvent("today", sub, name, picture, webSocketMessage.getPayloadAsText()))
-                    )
-                    .flatMap(messageEvent -> {
-                        redisClient.connectPubSub()
-                                .reactive()
-                                .publish(REDIS_MESSAGING_CHANNEL, messageEvent.toString())
-                                .subscribe();
-                        return Mono.just(messageEvent);
-                    }).subscribe();
-            return session.send(publisher);
         };
+    }
+
+    private void listenToMessages(WebSocketSession session, UserInfo userInfo, RedisClient redisClient) {
+        session.receive().flatMap(webSocketMessage ->
+                Mono.just(new MessageEvent(userInfo, webSocketMessage.getPayloadAsText()))
+        ).subscribe(messageEvent -> redisClient.connectPubSub()
+                .reactive()
+                .publish(REDIS_MESSAGING_CHANNEL, messageEvent.toString())
+                .subscribe());
+    }
+
+    private Flux<WebSocketMessage> publishMessages(WebSocketSession session, PublishSubscribeChannel channel) {
+        return Flux.create((Consumer<FluxSink<WebSocketMessage>>) fluxSink -> {
+            connections.put(session.getId(), new ForwardingMessageHandler(session, fluxSink));
+            channel.subscribe(connections.get(session.getId()));
+        }).doFinally(signalType -> {
+            channel.unsubscribe(connections.get(session.getId()));
+            connections.remove(session.getId());
+        });
     }
 
     private String authenticateHandshake(HandshakeInfo handshake) {
@@ -113,11 +118,11 @@ public class WebSocketConfiguration {
 
         DecodedJWT jwt = JWT.decode(token);
         String kid = jwt.getKeyId();
-        JwkProvider provider = new UrlJwkProvider(AUTH0_DOMAIN);
+        JwkProvider provider = new UrlJwkProvider(auth0Domain);
 
         try {
             Jwk jwk = provider.get(kid);
-            Algorithm algorithm = Algorithm.RSA256((RSAPublicKey) jwk.getPublicKey(), NULL_PRIVATE_KEY);
+            Algorithm algorithm = Algorithm.RSA256((RSAPublicKey) jwk.getPublicKey(), null);
             JWTVerifier verifier = JWT.require(algorithm).build();
             verifier.verify(token);
         } catch (JwkException | SignatureVerificationException e) {
