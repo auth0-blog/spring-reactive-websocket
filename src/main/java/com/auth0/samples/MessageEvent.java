@@ -22,7 +22,7 @@ class MessageEvent {
     private String picture;
     private String message;
 
-    public MessageEvent(UserInfo userInfo, String message) {
+    MessageEvent(UserInfo userInfo, String message) {
         this.when = new Date();
         this.name = (String) userInfo.getValues().get("name");
         this.picture = (String) userInfo.getValues().get("picture");

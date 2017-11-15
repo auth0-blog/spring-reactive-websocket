@@ -36,9 +36,6 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Consumer;
 
-import static com.auth0.samples.RedisConfiguration.REDIS_MESSAGING_CHANNEL;
-
-
 @Configuration
 public class WebSocketConfiguration {
     private final Map<String, MessageHandler> connections = new ConcurrentHashMap<>();
@@ -51,6 +48,9 @@ public class WebSocketConfiguration {
 
     @Value("${auth0.clientSecret}")
     private String auth0ClentSecret;
+
+    @Value("${redis.channel}")
+    private String redisChannel;
 
     @Bean
     public WebSocketHandlerAdapter webSocketHandlerAdapter() {
@@ -92,7 +92,7 @@ public class WebSocketConfiguration {
                 Mono.just(new MessageEvent(userInfo, webSocketMessage.getPayloadAsText()))
         ).subscribe(messageEvent -> redisClient.connectPubSub()
                 .reactive()
-                .publish(REDIS_MESSAGING_CHANNEL, messageEvent.toString())
+                .publish(redisChannel, messageEvent.toString())
                 .subscribe());
     }
 
